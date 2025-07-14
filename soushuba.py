@@ -14,6 +14,10 @@ import xml.etree.ElementTree as ET
 import time
 import logging
 
+# Vô hiệu hóa cảnh báo về SSL, vì chúng ta sẽ bỏ qua xác thực
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -25,7 +29,8 @@ logger.addHandler(ch)
 
 def get_refresh_url(url: str):
     try:
-        response = requests.get(url)
+        # SỬA LỖI: Thêm verify=False để bỏ qua kiểm tra SSL
+        response = requests.get(url, verify=False)
         if response.status_code != 403:
             response.raise_for_status()
 
@@ -46,7 +51,8 @@ def get_refresh_url(url: str):
         return None
 
 def get_url(url: str):
-    resp = requests.get(url)
+    # SỬA LỖI: Thêm verify=False để bỏ qua kiểm tra SSL
+    resp = requests.get(url, verify=False)
     soup = BeautifulSoup(resp.content, 'html.parser')
     
     links = soup.find_all('a', href=True)
@@ -60,6 +66,10 @@ class SouShuBaClient:
     def __init__(self, hostname: str, username: str, password: str, questionid: str = '0', answer: str = None,
                  proxies: dict | None = None):
         self.session: requests.Session = requests.Session()
+        
+        # SỬA LỖI: Cấu hình cho toàn bộ session này bỏ qua việc xác thực SSL
+        self.session.verify = False
+
         self.hostname = hostname
         self.username = username
         self.password = password
@@ -76,6 +86,7 @@ class SouShuBaClient:
         self.proxies = proxies
 
     def login_form_hash(self):
+        # Không cần thêm verify=False ở đây nữa vì session đã được cấu hình
         rst = self.session.get(f'https://{self.hostname}/member.php?mod=logging&action=login').text
         loginhash = re.search(r'<div id="main_messaqge_(.+?)">', rst).group(1)
         formhash = re.search(r'<input type="hidden" name="formhash" value="(.+?)" />', rst).group(1)
@@ -100,6 +111,7 @@ class SouShuBaClient:
             'answer': self.answer
         }
 
+        # Không cần thêm verify=False ở đây nữa
         resp = self.session.post(login_url, proxies=self.proxies, data=payload, headers=headers)
         if resp.status_code == 200:
             logger.info(f'Welcome {self.username}!')
@@ -151,14 +163,28 @@ class SouShuBaClient:
 
 if __name__ == '__main__':
     try:
-        redirect_url = get_refresh_url('http://' + os.environ.get('SOUSHUBA_HOSTNAME', 'www.soushu2025.com'))
+        # ĐẢM BẢO GIÁ TRỊ CỦA SECRET NÀY CHỈ LÀ HOSTNAME, KHÔNG PHẢI URL ĐẦY ĐỦ
+        # Ví dụ: www.soushu2025.com
+        hostname = os.environ.get('SOUSHUBA_HOSTNAME')
+        if not hostname:
+             raise ValueError("Secret SOUSHUBA_HOSTNAME không được đặt!")
+
+        redirect_url = get_refresh_url('http://' + hostname)
         time.sleep(2)
         redirect_url2 = get_refresh_url(redirect_url)
         url = get_url(redirect_url2)
-        logger.info(f'{url}')
-        client = SouShuBaClient(urlparse(url).hostname,
-                                os.environ.get('SOUSHUBA_USERNAME', "libesse"),
-                                os.environ.get('SOUSHUBA_PASSWORD', "yF9pnSBLH3wpnLd"))
+        
+        if not url:
+            raise ValueError("Không thể tìm thấy URL cuối cùng của diễn đàn.")
+
+        logger.info(f'Tìm thấy URL cuối cùng của diễn đàn: {url}')
+        
+        # Lấy hostname từ URL cuối cùng
+        final_hostname = urlparse(url).hostname
+
+        client = SouShuBaClient(final_hostname,
+                                os.environ.get('SOUSHUBA_USERNAME'),
+                                os.environ.get('SOUSHUBA_PASSWORD'))
         client.login()
         client.space()
         credit = client.credit()
